@@ -1,5 +1,5 @@
 // VideoManager.js
-// verson: 1.0.29012026
+// version: 1.1.28012026 - fix positioning jump, remove controls, fix event listener removal & handles
 
 class videoManager {
 	constructor(videoWrap) {
@@ -12,25 +12,49 @@ class videoManager {
 		this.lastMouseX = 0;
 		this.lastMouseY = 0;
 		this.isPanning = false;
+
+		// stored listeners so removeEventListener works
+		this._onMouseMoveResize = null;
+		this._onMouseUpResize = null;
+		this._zoomPanInitialized = false;
 	}
 
 	initVideoElement() {
+		// Ensure the wrapper is positioned
+		if (!this.videoWrap.style.position || this.videoWrap.style.position === '') {
+			this.videoWrap.style.position = 'relative';
+		}
+
 		// Kiểm tra và tạo thẻ #video3d nếu chưa có
 		let video3d = document.getElementById('video3d');
 		if (!video3d) {
 			video3d = document.createElement('div');
 			video3d.id = 'video3d';
 			video3d.style.position = 'absolute';
-			video3d.style.bottom = '0';
+			// Don't set bottom; use top to avoid jump when later setting top
+			// Place initial top so it visually sits at bottom (same visual) but using top property.
+			const wrapHeight = this.videoWrap.clientHeight || window.innerHeight;
+			const initialSize = 120;
+			video3d.style.top = Math.max(0, wrapHeight - initialSize) + 'px';
 			video3d.style.left = '0';
-			video3d.style.width = '120px';
-			video3d.style.height = '120px';
+			video3d.style.width = initialSize + 'px';
+			video3d.style.height = initialSize + 'px';
 			video3d.style.border = '2px solid #ccc';
 			video3d.style.backgroundColor = '#f0f0f0';
+			video3d.style.boxSizing = 'border-box';
+			video3d.style.cursor = 'grab';
 			this.videoWrap.appendChild(video3d);
+		} else {
+			// If element existed and had bottom, convert to top to keep consistent behaviour
+			if (video3d.style.bottom) {
+				const rect = video3d.getBoundingClientRect();
+				const parentRect = this.videoWrap.getBoundingClientRect();
+				video3d.style.top = (rect.top - parentRect.top) + 'px';
+				video3d.style.bottom = '';
+			}
 		}
 
-		// Thêm điều khiển resize 4 cạnh cho #video3d
+		// Thêm điều khiển resize cho #video3d
 		this.addResizeHandles(video3d);
 
 		// Thiết lập zoom và pan cho thẻ video bên trong #video3d
@@ -39,15 +63,16 @@ class videoManager {
 
 	addResizeHandles(container) {
 		container.style.resize = 'none'; // Tắt resize mặc định
-
+		container.style.boxSizing = 'border-box';
 		// Tạo handles cho 4 cạnh và 4 góc
-		const handles = ['top', 'right', 'top-right'];
+		const handles = ['top', 'right', 'bottom', 'left', 'top-left', 'top-right', 'bottom-left', 'bottom-right'];
 		handles.forEach(handle => {
 			const resizeHandle = document.createElement('div');
 			resizeHandle.className = `resize-handle ${handle}`;
 			resizeHandle.style.position = 'absolute';
 			resizeHandle.style.background = 'transparent';
 			resizeHandle.style.cursor = this.getCursorStyle(handle);
+			resizeHandle.style.zIndex = '10';
 
 			// Định vị handles
 			switch (handle) {
@@ -140,8 +165,12 @@ class videoManager {
 		this.lastMouseX = e.clientX;
 		this.lastMouseY = e.clientY;
 
-		document.addEventListener('mousemove', (e) => this.resize(e, container));
-		document.addEventListener('mouseup', this.stopResize.bind(this));
+		// store listeners so we can remove exactly the same refs
+		this._onMouseMoveResize = (ev) => this.resize(ev, container);
+		this._onMouseUpResize = () => this.stopResize();
+
+		document.addEventListener('mousemove', this._onMouseMoveResize);
+		document.addEventListener('mouseup', this._onMouseUpResize);
 	}
 
 	resize(e, container) {
@@ -202,6 +231,8 @@ class videoManager {
 
 		container.style.left = newLeft + 'px';
 		container.style.top = newTop + 'px';
+		// clear bottom to avoid conflicting with top
+		container.style.bottom = '';
 		container.style.width = newWidth + 'px';
 		container.style.height = newHeight + 'px';
 
@@ -212,18 +243,34 @@ class videoManager {
 	stopResize() {
 		this.isResizing = false;
 		this.resizeHandle = null;
-		document.removeEventListener('mousemove', this.resize.bind(this));
-		document.removeEventListener('mouseup', this.stopResize.bind(this));
+		// remove stored listeners if exist
+		if (this._onMouseMoveResize) {
+			document.removeEventListener('mousemove', this._onMouseMoveResize);
+			this._onMouseMoveResize = null;
+		}
+		if (this._onMouseUpResize) {
+			document.removeEventListener('mouseup', this._onMouseUpResize);
+			this._onMouseUpResize = null;
+		}
 	}
 
 	setupZoomPan(container) {
-		if (!this.videoElement) return;
+		// Avoid attaching duplicate listeners
+		if (this._zoomPanInitialized) return;
+		this._zoomPanInitialized = true;
 
-		this.videoElement.style.transformOrigin = 'center center';
-		container.addEventListener('wheel', this.handleZoom.bind(this));
+		if (!this.videoElement) {
+			// will be set when video added; still attach event handlers so pan/zoom works once video exists
+		}
+
+		this.videoElement && (this.videoElement.style.transformOrigin = 'center center');
+
+		// Use container-level events to avoid multiple global listeners
+		container.addEventListener('wheel', this.handleZoom.bind(this), { passive: false });
 		container.addEventListener('mousedown', this.startPan.bind(this));
-		document.addEventListener('mousemove', this.pan.bind(this));
-		document.addEventListener('mouseup', this.stopPan.bind(this));
+		container.addEventListener('mousemove', this.pan.bind(this));
+		container.addEventListener('mouseup', this.stopPan.bind(this));
+		container.addEventListener('mouseleave', this.stopPan.bind(this));
 
 		// Ngăn menu chuột phải
 		container.addEventListener('contextmenu', (e) => e.preventDefault());
@@ -260,11 +307,12 @@ class videoManager {
 
 	stopPan() {
 		this.isPanning = false;
-		document.body.style.cursor = 'grab';
+		document.body.style.cursor = 'default';
 	}
 
 	updateTransform() {
 		if (this.videoElement) {
+			// Keep consistent transform order: scale then translate scaled distances
 			this.videoElement.style.transform = `scale(${this.zoom}) translate(${this.pan.x / this.zoom}px, ${this.pan.y / this.zoom}px)`;
 		}
 	}
@@ -292,19 +340,27 @@ class videoManager {
 
 		// Xóa video cũ nếu có
 		if (this.videoElement) {
-			video3d.removeChild(this.videoElement);
+			try { video3d.removeChild(this.videoElement); } catch (err) {}
 		}
 
 		this.videoElement = document.createElement('video');
 		this.videoElement.src = src;
-		this.videoElement.controls = true;
+		// Remove built-in controls as requested
+		this.videoElement.controls = false;
 		this.videoElement.style.width = '100%';
 		this.videoElement.style.height = '100%';
 		this.videoElement.style.objectFit = 'contain';
+		this.videoElement.style.display = 'block';
+		this.videoElement.style.transformOrigin = 'center center';
 		video3d.appendChild(this.videoElement);
 
-		// Thiết lập zoom và pan
+		// Thiết lập zoom và pan (will be no-op if already initialized)
 		this.setupZoomPan(video3d);
+
+		// Reset transform/pan/zoom when new video loaded
+		this.zoom = 1;
+		this.pan = { x: 0, y: 0 };
+		this.updateTransform();
 	}
 
 	skipLeft() {
@@ -337,4 +393,3 @@ class videoManager {
 		}
 	}
 }
-
