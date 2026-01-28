@@ -338,6 +338,3 @@ class videoManager {
 	}
 }
 
-const videowrap = document.querySelector("body");
-const video = new videoManager(videowrap);
-video.initVideoElement();
