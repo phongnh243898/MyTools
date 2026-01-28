@@ -1,0 +1,27 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Video Manager Demo</title>
+</head>
+<body>
+    <h1>Video Manager</h1>
+    <input type="file" id="videoUpload" accept="video/*" />
+    <label for="videoUpload">Upload Video</label>
+    <script src="3dseg/VideoManager.js"></script>
+    <script>
+        const videowrap = document.querySelector("body");
+        const video = new videoManager(videowrap);
+        video.initVideoElement();
+        
+        // Handle video upload
+        document.getElementById('videoUpload').addEventListener('change', function(event) {
+            const file = event.target.files[0];
+            if (file) {
+                video.load_video_from_file(file);
+            }
+        });
+    </script>
+</body>
+</html>
