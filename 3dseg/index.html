@@ -11,7 +11,9 @@
     <label for="videoUpload">Upload Video</label>
     <script src="./VideoManager.js"></script>
     <script>
+        // Ensure body is positioned so absolute children are positioned relative to it
         const videowrap = document.querySelector("body");
+        videowrap.style.position = videowrap.style.position || 'relative';
         const video = new videoManager(videowrap);
         video.initVideoElement();
         
