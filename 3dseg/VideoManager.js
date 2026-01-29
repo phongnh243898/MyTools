@@ -1,395 +1,220 @@
-// VideoManager.js
-// version: 1.1.28012026 - fix positioning jump, remove controls, fix event listener removal & handles
+console.log("VideoManager.js version 1.00.29012026");
 
-class videoManager {
-	constructor(videoWrap) {
-		this.videoWrap = videoWrap;
-		this.zoom = 1;
-		this.pan = { x: 0, y: 0 };
-		this.videoElement = null;
-		this.isResizing = false;
-		this.resizeHandle = null;
-		this.lastMouseX = 0;
-		this.lastMouseY = 0;
-		this.isPanning = false;
+class VideoManager {
+    constructor(videoContainer) {
+        this.container = videoContainer;
+        if (!this.container) throw new Error("Container element không tồn tại.");
 
-		// stored listeners so removeEventListener works
-		this._onMouseMoveResize = null;
-		this._onMouseUpResize = null;
-		this._zoomPanInitialized = false;
-	}
+        this.video = null;
+        this.isFocused = false;
 
-	initVideoElement() {
-		// Ensure the wrapper is positioned
-		if (!this.videoWrap.style.position || this.videoWrap.style.position === '') {
-			this.videoWrap.style.position = 'relative';
-		}
+        this.transform = { scale: 1, x: 0, y: 0 };
+        this.isPanning = false;
+        this.startPan = { x: 0, y: 0 };
 
-		// Kiểm tra và tạo thẻ #video3d nếu chưa có
-		let video3d = document.getElementById('video3d');
-		if (!video3d) {
-			video3d = document.createElement('div');
-			video3d.id = 'video3d';
-			video3d.style.position = 'absolute';
-			// Don't set bottom; use top to avoid jump when later setting top
-			// Place initial top so it visually sits at bottom (same visual) but using top property.
-			const wrapHeight = this.videoWrap.clientHeight || window.innerHeight;
-			const initialSize = 120;
-			video3d.style.top = Math.max(0, wrapHeight - initialSize) + 'px';
-			video3d.style.left = '0';
-			video3d.style.width = initialSize + 'px';
-			video3d.style.height = initialSize + 'px';
-			video3d.style.border = '2px solid #ccc';
-			video3d.style.backgroundColor = '#f0f0f0';
-			video3d.style.boxSizing = 'border-box';
-			video3d.style.cursor = 'grab';
-			this.videoWrap.appendChild(video3d);
-		} else {
-			// If element existed and had bottom, convert to top to keep consistent behaviour
-			if (video3d.style.bottom) {
-				const rect = video3d.getBoundingClientRect();
-				const parentRect = this.videoWrap.getBoundingClientRect();
-				video3d.style.top = (rect.top - parentRect.top) + 'px';
-				video3d.style.bottom = '';
-			}
-		}
+        this.initDom();
+        this.initEvent();
+        this.initResizeHandles();
+    }
 
-		// Thêm điều khiển resize cho #video3d
-		this.addResizeHandles(video3d);
+    initDom() {
+        this.video = document.createElement('video');
+        this.video.style.width = '100%';
+        this.video.style.height = '100%';
+        this.video.style.objectFit = 'contain';
+        this.video.style.pointerEvents = 'none';
+        this.video.disablePictureInPicture = true;
+        this.container.tabIndex = 0; 
+        this.container.appendChild(this.video);
+    }
 
-		// Thiết lập zoom và pan cho thẻ video bên trong #video3d
-		this.setupZoomPan(video3d);
-	}
+    initEvent() {
+        // Xử lý Focus/Blur
+        this.container.addEventListener('focus', () => { this.isFocused = true; });
+        this.container.addEventListener('blur', () => { 
+            this.isFocused = false; 
+            this.video.pause(); 
+        });
 
-	addResizeHandles(container) {
-		container.style.resize = 'none'; // Tắt resize mặc định
-		container.style.boxSizing = 'border-box';
-		// Tạo handles cho 4 cạnh và 4 góc
-		const handles = ['top', 'right', 'bottom', 'left', 'top-left', 'top-right', 'bottom-left', 'bottom-right'];
-		handles.forEach(handle => {
-			const resizeHandle = document.createElement('div');
-			resizeHandle.className = `resize-handle ${handle}`;
-			resizeHandle.style.position = 'absolute';
-			resizeHandle.style.background = 'transparent';
-			resizeHandle.style.cursor = this.getCursorStyle(handle);
-			resizeHandle.style.zIndex = '10';
+        // Phím tắt điều khiển
+        window.addEventListener('keydown', (e) => {
+            if (!this.isFocused) return;
+            switch(e.code) {
+                case 'Space':
+                    e.preventDefault();
+                    this.video.paused ? this.video.play() : this.video.pause();
+                    break;
+                case 'ArrowLeft':
+                    this.video.currentTime -= 0.1;
+                    break;
+                case 'ArrowRight':
+                    this.video.currentTime += 0.1;
+                    break;
+            }
+        });
 
-			// Định vị handles
-			switch (handle) {
-				case 'top':
-					resizeHandle.style.top = '-5px';
-					resizeHandle.style.left = '0';
-					resizeHandle.style.width = '100%';
-					resizeHandle.style.height = '10px';
-					break;
-				case 'right':
-					resizeHandle.style.top = '0';
-					resizeHandle.style.right = '-5px';
-					resizeHandle.style.width = '10px';
-					resizeHandle.style.height = '100%';
-					break;
-				case 'bottom':
-					resizeHandle.style.bottom = '-5px';
-					resizeHandle.style.left = '0';
-					resizeHandle.style.width = '100%';
-					resizeHandle.style.height = '10px';
-					break;
-				case 'left':
-					resizeHandle.style.top = '0';
-					resizeHandle.style.left = '-5px';
-					resizeHandle.style.width = '10px';
-					resizeHandle.style.height = '100%';
-					break;
-				case 'top-left':
-					resizeHandle.style.top = '-5px';
-					resizeHandle.style.left = '-5px';
-					resizeHandle.style.width = '10px';
-					resizeHandle.style.height = '10px';
-					break;
-				case 'top-right':
-					resizeHandle.style.top = '-5px';
-					resizeHandle.style.right = '-5px';
-					resizeHandle.style.width = '10px';
-					resizeHandle.style.height = '10px';
-					break;
-				case 'bottom-left':
-					resizeHandle.style.bottom = '-5px';
-					resizeHandle.style.left = '-5px';
-					resizeHandle.style.width = '10px';
-					resizeHandle.style.height = '10px';
-					break;
-				case 'bottom-right':
-					resizeHandle.style.bottom = '-5px';
-					resizeHandle.style.right = '-5px';
-					resizeHandle.style.width = '10px';
-					resizeHandle.style.height = '10px';
-					break;
-			}
+        // Zoom (Wheel)
+        this.container.addEventListener('wheel', (e) => {
+            if (!this.isFocused) return;
+            e.preventDefault();
+            const delta = e.deltaY > 0 ? 0.9 : 1.1;
+            this.transform.scale = Math.min(Math.max(0.5, this.transform.scale * delta), 5);
+            this._apply_transform_();
+        }, { passive: false });
 
-			resizeHandle.addEventListener('mousedown', (e) => {
-				this.startResize(e, handle, container);
-			});
+        // Pan (Mouse Drag)
+        this.container.addEventListener('mousedown', (e) => {
+            if (e.button !== 2) return;
+            this.isPanning = true;
+            this.startPan = { x: e.clientX - this.transform.x, y: e.clientY - this.transform.y };
+            this.container.style.cursor = 'grabbing';
+        });
 
-			container.appendChild(resizeHandle);
-		});
+        this.container.addEventListener('mousemove', (e) => {
+            if (!this.isPanning) return;
+            this.transform.x = e.clientX - this.startPan.x;
+            this.transform.y = e.clientY - this.startPan.y;
+            this._apply_transform_();
+        });
 
-		// Ngăn chọn text khi resize
-		document.addEventListener('selectstart', (e) => {
-			if (this.isResizing) e.preventDefault();
-		});
-	}
+        this.container.addEventListener('mouseup', () => {
+            this.isPanning = false;
+            this.container.style.cursor = 'default';
+        });
 
-	getCursorStyle(handle) {
-		switch (handle) {
-			case 'top':
-			case 'bottom':
-				return 'ns-resize';
-			case 'left':
-			case 'right':
-				return 'ew-resize';
-			case 'top-left':
-			case 'bottom-right':
-				return 'nw-resize';
-			case 'top-right':
-			case 'bottom-left':
-				return 'ne-resize';
-			default:
-				return 'default';
-		}
-	}
+        this.container.addEventListener('contextmenu', (e) => {
+            e.preventDefault();
+        });
+    }
 
-	startResize(e, handle, container) {
-		e.preventDefault();
-		this.isResizing = true;
-		this.resizeHandle = handle;
-		this.lastMouseX = e.clientX;
-		this.lastMouseY = e.clientY;
-
-		// store listeners so we can remove exactly the same refs
-		this._onMouseMoveResize = (ev) => this.resize(ev, container);
-		this._onMouseUpResize = () => this.stopResize();
-
-		document.addEventListener('mousemove', this._onMouseMoveResize);
-		document.addEventListener('mouseup', this._onMouseUpResize);
-	}
-
-	resize(e, container) {
-		if (!this.isResizing) return;
-
-		const deltaX = e.clientX - this.lastMouseX;
-		const deltaY = e.clientY - this.lastMouseY;
-		const rect = container.getBoundingClientRect();
-		const parentRect = this.videoWrap.getBoundingClientRect();
-
-		let newLeft = rect.left - parentRect.left;
-		let newTop = rect.top - parentRect.top;
-		let newWidth = rect.width;
-		let newHeight = rect.height;
-
-		switch (this.resizeHandle) {
-			case 'top':
-				newTop += deltaY;
-				newHeight -= deltaY;
-				break;
-			case 'right':
-				newWidth += deltaX;
-				break;
-			case 'bottom':
-				newHeight += deltaY;
-				break;
-			case 'left':
-				newLeft += deltaX;
-				newWidth -= deltaX;
-				break;
-			case 'top-left':
-				newLeft += deltaX;
-				newTop += deltaY;
-				newWidth -= deltaX;
-				newHeight -= deltaY;
-				break;
-			case 'top-right':
-				newTop += deltaY;
-				newWidth += deltaX;
-				newHeight -= deltaY;
-				break;
-			case 'bottom-left':
-				newLeft += deltaX;
-				newWidth -= deltaX;
-				newHeight += deltaY;
-				break;
-			case 'bottom-right':
-				newWidth += deltaX;
-				newHeight += deltaY;
-				break;
-		}
-
-		// Giới hạn trong videoWrap
-		newLeft = Math.max(0, Math.min(newLeft, parentRect.width - newWidth));
-		newTop = Math.max(0, Math.min(newTop, parentRect.height - newHeight));
-		newWidth = Math.max(50, Math.min(newWidth, parentRect.width - newLeft));
-		newHeight = Math.max(50, Math.min(newHeight, parentRect.height - newTop));
-
-		container.style.left = newLeft + 'px';
-		container.style.top = newTop + 'px';
-		// clear bottom to avoid conflicting with top
-		container.style.bottom = '';
-		container.style.width = newWidth + 'px';
-		container.style.height = newHeight + 'px';
-
-		this.lastMouseX = e.clientX;
-		this.lastMouseY = e.clientY;
-	}
-
-	stopResize() {
-		this.isResizing = false;
-		this.resizeHandle = null;
-		// remove stored listeners if exist
-		if (this._onMouseMoveResize) {
-			document.removeEventListener('mousemove', this._onMouseMoveResize);
-			this._onMouseMoveResize = null;
-		}
-		if (this._onMouseUpResize) {
-			document.removeEventListener('mouseup', this._onMouseUpResize);
-			this._onMouseUpResize = null;
-		}
-	}
-
-	setupZoomPan(container) {
-		// Avoid attaching duplicate listeners
-		if (this._zoomPanInitialized) return;
-		this._zoomPanInitialized = true;
-
-		if (!this.videoElement) {
-			// will be set when video added; still attach event handlers so pan/zoom works once video exists
-		}
-
-		this.videoElement && (this.videoElement.style.transformOrigin = 'center center');
-
-		// Use container-level events to avoid multiple global listeners
-		container.addEventListener('wheel', this.handleZoom.bind(this), { passive: false });
-		container.addEventListener('mousedown', this.startPan.bind(this));
-		container.addEventListener('mousemove', this.pan.bind(this));
-		container.addEventListener('mouseup', this.stopPan.bind(this));
-		container.addEventListener('mouseleave', this.stopPan.bind(this));
-
-		// Ngăn menu chuột phải
-		container.addEventListener('contextmenu', (e) => e.preventDefault());
-	}
-
-	handleZoom(e) {
-		e.preventDefault();
-		const zoomFactor = e.deltaY > 0 ? 0.9 : 1.1;
-		this.zoom *= zoomFactor;
-		this.zoom = Math.max(0.1, Math.min(5, this.zoom)); // Giới hạn zoom
-		this.updateTransform();
-	}
-
-	startPan(e) {
-		if (e.button !== 0) return; // Chỉ chuột trái
-		e.preventDefault();
-		this.isPanning = true;
-		this.lastMouseX = e.clientX;
-		this.lastMouseY = e.clientY;
-		document.body.style.cursor = 'grabbing';
-	}
-
-	pan(e) {
-		if (!this.isPanning) return;
-		e.preventDefault();
-		const deltaX = e.clientX - this.lastMouseX;
-		const deltaY = e.clientY - this.lastMouseY;
-		this.pan.x += deltaX;
-		this.pan.y += deltaY;
-		this.lastMouseX = e.clientX;
-		this.lastMouseY = e.clientY;
-		this.updateTransform();
-	}
-
-	stopPan() {
-		this.isPanning = false;
-		document.body.style.cursor = 'default';
-	}
-
-	updateTransform() {
-		if (this.videoElement) {
-			// Keep consistent transform order: scale then translate scaled distances
-			this.videoElement.style.transform = `scale(${this.zoom}) translate(${this.pan.x / this.zoom}px, ${this.pan.y / this.zoom}px)`;
-		}
-	}
-
-	load_video_from_file(file) {
-		if (file && file.type.startsWith('video/')) {
-			const videoSrc = URL.createObjectURL(file);
-			this.createVideoElement(videoSrc);
-		} else {
-			console.error('Invalid file type. Please select a video file.');
-		}
-	}
-
-	load_video_from_url(url) {
-		if (url) {
-			this.createVideoElement(url);
-		} else {
-			console.error('Invalid URL provided.');
-		}
-	}
-
-	createVideoElement(src) {
-		const video3d = document.getElementById('video3d');
-		if (!video3d) return;
-
-		// Xóa video cũ nếu có
-		if (this.videoElement) {
-			try { video3d.removeChild(this.videoElement); } catch (err) {}
-		}
-
-		this.videoElement = document.createElement('video');
-		this.videoElement.src = src;
-		// Remove built-in controls as requested
-		this.videoElement.controls = false;
-		this.videoElement.style.width = '100%';
-		this.videoElement.style.height = '100%';
-		this.videoElement.style.objectFit = 'contain';
-		this.videoElement.style.display = 'block';
-		this.videoElement.style.transformOrigin = 'center center';
-		video3d.appendChild(this.videoElement);
-
-		// Thiết lập zoom và pan (will be no-op if already initialized)
-		this.setupZoomPan(video3d);
-
-		// Reset transform/pan/zoom when new video loaded
-		this.zoom = 1;
-		this.pan = { x: 0, y: 0 };
-		this.updateTransform();
-	}
-
-	skipLeft() {
-		if (this.videoElement) {
-			const wasPlaying = !this.videoElement.paused;
-			this.videoElement.currentTime = Math.max(0, this.videoElement.currentTime - 0.1);
-			if (wasPlaying) {
-				this.videoElement.play();
-			}
-		}
-	}
-
-	skipRight() {
-		if (this.videoElement) {
-			const wasPlaying = !this.videoElement.paused;
-			this.videoElement.currentTime = Math.min(this.videoElement.duration, this.videoElement.currentTime + 0.1);
-			if (wasPlaying) {
-				this.videoElement.play();
-			}
-		}
-	}
-
-	play() {
-		if (this.videoElement) {
-			if (this.videoElement.paused) {
-				this.videoElement.play();
-			} else {
-				this.videoElement.pause();
-			}
-		}
-	}
+initResizeHandles() {
+    const positions = ['n', 's', 'e', 'w', 'nw', 'ne', 'sw', 'se'];
+    positions.forEach(pos => {
+        const handle = document.createElement('div');
+        handle.className = `resizer ${pos}`;
+        handle.style.position = 'absolute';
+        switch (pos) {
+            case 'n':
+            case 's':
+                handle.style.width = '100%';
+                handle.style.height = '10px';
+                handle.style.zIndex = '10';
+                break;
+            case 'e':
+            case 'w':
+                handle.style.width = '10px';
+                handle.style.height = '100%';
+                handle.style.zIndex = '10';
+                break;
+            case 'nw':
+            case 'ne':
+            case 'sw':
+            case 'se':
+                handle.style.width = '20px';
+                handle.style.height = '20px';
+                handle.style.zIndex = '11';
+                break;
+        }
+        this._setHandlePosition(handle, pos);
+        this.container.appendChild(handle);
+        this._makeResizable(handle, pos);
+    });
 }
+
+_setHandlePosition(el, pos) {
+    const offset = '-5px';
+    if (pos.includes('n')) el.style.top = offset;
+    if (pos.includes('s')) el.style.bottom = offset;
+    if (pos.includes('e')) el.style.right = offset;
+    if (pos.includes('w')) el.style.left = offset;
+    if (pos.length === 1) {
+        if (pos === 'n' || pos === 's') {
+            el.style.left = '50%';
+            el.style.transform = 'translateX(-50%)';
+        }
+        if (pos === 'e' || pos === 'w') {
+            el.style.top = '50%';
+            el.style.transform = 'translateY(-50%)';
+        }
+    }
+    const cursorMap = {
+        n: 'ns-resize',
+        s: 'ns-resize',
+        e: 'ew-resize',
+        w: 'ew-resize',
+        nw: 'nwse-resize',
+        se: 'nwse-resize',
+        ne: 'nesw-resize',
+        sw: 'nesw-resize'
+    };
+    el.style.cursor = cursorMap[pos];
+}
+
+
+    _makeResizable(handle, pos) {
+        handle.addEventListener('mousedown', (e) => {
+            e.preventDefault();
+            e.stopPropagation();
+            const startWidth = this.container.offsetWidth;
+            const startHeight = this.container.offsetHeight;
+            const startX = e.clientX;
+            const startY = e.clientY;
+
+            const onMouseMove = (moveEvent) => {
+                if (pos.includes('e')) this.container.style.width = `${startWidth + (moveEvent.clientX - startX)}px`;
+                if (pos.includes('w')) this.container.style.width = `${startWidth - (moveEvent.clientX - startX)}px`;
+                if (pos.includes('s')) this.container.style.height = `${startHeight + (moveEvent.clientY - startY)}px`;
+                if (pos.includes('n')) this.container.style.height = `${startHeight - (moveEvent.clientY - startY)}px`;
+            };
+
+            const onMouseUp = () => {
+                window.removeEventListener('mousemove', onMouseMove);
+                window.removeEventListener('mouseup', onMouseUp);
+            };
+
+            window.addEventListener('mousemove', onMouseMove);
+            window.addEventListener('mouseup', onMouseUp);
+        });
+    }
+
+    loadVideoFromFile(file) {
+        if (!file || !this.video) return;
+        try {
+            this.clean();
+            const url = URL.createObjectURL(file);
+            this.video.src = url;
+            this.video.load();
+        } catch (err) {
+            console.error("Lỗi load file:", err);
+        }
+    }
+
+    loadVideoFromURL(url) {
+        if (!url || !this.video) return;
+        this.clean();
+        this.video.src = url;
+    }
+
+    _apply_transform_() {
+        if (!this.video) return;
+        this.video.style.transform = `translate(${this.transform.x}px, ${this.transform.y}px) scale(${this.transform.scale})`;
+    }
+
+    clean() {
+        if (this.video.src && this.video.src.startsWith('blob:')) {
+            URL.revokeObjectURL(this.video.src);
+        }
+        this.video.src = "";
+        this.transform = { scale: 1, x: 0, y: 0 };
+        this._apply_transform_();
+    }
+}
+
+
+const videoContainer = document.querySelector("#videoWrap");
+const inputVideo = document.querySelector("#videoUpload");
+const video_manager = new VideoManager(videoContainer);
+inputVideo.addEventListener('change', function(event) {
+    const file = event.target.files[0];
+    if (file) video_manager.loadVideoFromFile(file);
+})
